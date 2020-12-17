@@ -1,33 +1,4 @@
-import invert from "./invert";
-
-// dilate[img_, str_, r_] :=
-//  Module[{dimensions, w, x, y, pair, xOffset, yOffset, xNew, yNew,
-//    imgBefore, imgAfter},
-//   dimensions = Dimensions[img];
-//   imgBefore = img;
-//   imgAfter = img;
-//   For[w = 1, w <= r, w++,
-//    For[x = 1, x <= dimensions[[1]], x++,
-//     For[y = 1, y <= dimensions[[2]], y++,
-//      If[imgBefore[[x, y]] == 1,
-//        For[z = 1, z <= Length[str], z++,
-//          pair = str[[z]];
-//          xOffset = pair[[1]];
-//          yOffset = pair[[2]];
-//          xNew = x + xOffset;
-//          yNew = y + yOffset;
-//          If [
-//           xNew < 1 || xNew > dimensions[[1]] || yNew < 1 ||
-//            yNew > dimensions[[2]], Continue[]];
-//          imgAfter[[xNew, yNew]] = 1;
-//          ];
-//        ];
-//      ]
-//     ];
-//    imgBefore = imgAfter;
-//    ];
-//   imgAfter
-//   ]
+import { invert } from "./tools";
 
 export const dilate = (
   binRep: number[][],
@@ -84,13 +55,13 @@ export const close = (
 
 export const structSquare = [
   [-1, -1],
+  [0, -1],
+  [1, -1],
   [-1, 0],
+  [1, 0],
   [-1, 1],
   [0, 1],
   [1, 1],
-  [1, 0],
-  [1, -1],
-  [0, -1],
 ];
 
 export const structCross = [
@@ -115,6 +86,7 @@ export const flood = (
   }
   visited[start[0]][start[1]] = 1;
   const stack = [start];
+  resultSet.push(start);
   count++;
   while (stack.length !== 0) {
     const current = stack.pop();
@@ -162,34 +134,6 @@ export const labelComponents = (binRep: number[][], struct: number[][]) => {
   }
   return { result: resultSet, counts: indexCount };
 };
-
-// getLargestComponents[img_, k_, conn_] :=
-//  Module[{numComponents, labelCounts, labelled, dimensions, resultSet,
-//    x, y, w, sorted},
-//   numComponents = numberComponents[img, conn];
-//   labelCounts = Table[{i, 0}, {i, numComponents}];
-//   labelled = labelComponents[img, conn];
-//   dimensions = Dimensions[img];
-//   resultSet = Table[Table[0, {dimensions[[2]]}], {dimensions[[1]]}];
-//   For[x = 1, x <= dimensions[[1]], x++,
-//    For[y = 1, y <= dimensions[[2]], y++,
-//      If[labelled[[x, y]] != 0,
-//        labelCounts[[labelled[[x, y]], 2]] =
-//          labelCounts[[labelled[[x, y]], 2]] + 1;
-//        ];
-//      ];
-//    ];
-//   sorted = Sort[labelCounts, #1[[2]] > #2[[2]] &];
-//   For[w = 1, w <= k, w++,
-//    For[x = 1, x <= dimensions[[1]], x++,
-//      For[y = 1, y <= dimensions[[2]], y++,
-//        If[labelled[[x, y]] == sorted[[w, 1]],
-//          resultSet[[x, y]] = 1;];
-//        ];
-//      ];
-//    ];
-//   resultSet
-//   ]
 
 export const getLargestComponents = (
   binRep: number[][],
