@@ -286,28 +286,28 @@ function App() {
           case "open":
             maskBinRef.current = open(
               maskBinRef.current,
-              structCross,
+              structSquare,
               openIterations
             );
             break;
           case "close":
             maskBinRef.current = close(
               maskBinRef.current,
-              structCross,
+              structSquare,
               closeIterations
             );
             break;
           case "dilate":
             maskBinRef.current = dilate(
               maskBinRef.current,
-              structCross,
+              structSquare,
               dilateIterations
             );
             break;
           case "erode":
             maskBinRef.current = erode(
               maskBinRef.current,
-              structCross,
+              structSquare,
               erodeIterations
             );
             break;
