@@ -59,6 +59,62 @@ export const greyscaleToBinAdaptive = (
   return binRep;
 };
 
+export const greyscaleToBinLimitedAdaptive = (
+  greyscaleRep: number[][],
+  radius: number,
+  c: number,
+  clip: number
+) => {
+  const height = greyscaleRep.length;
+  const width = greyscaleRep[0].length;
+  const reducer = (accumulator: number, currentValue: number) =>
+    accumulator + currentValue;
+  const sum = greyscaleRep.map((e) => e.reduce(reducer)).reduce(reducer);
+  const globalMean = Math.floor(sum / (height * width));
+  const binRep = [...Array(height)].map((e) => Array(width).fill(0));
+  for (let i = 0; i < height; i++) {
+    for (let j = 0; j < width; j++) {
+      let sum = 0;
+      let blockWidth = radius * 2 + 1;
+      let regionSize = blockWidth * blockWidth;
+      const cdf = Array(256).fill(0);
+      let numClipped = 0;
+      for (let a = i - radius; a <= i + radius; a++) {
+        for (let b = j - radius; b <= j + radius; b++) {
+          let iNew = a;
+          let jNew = b;
+          if (a < 0) {
+            iNew = -(a + 1);
+          } else if (a >= height) {
+            iNew = -(a - height) + height - 1;
+          }
+          if (b < 0) {
+            jNew = -(b + 1);
+          } else if (b >= width) {
+            jNew = -(b - width) + width - 1;
+          }
+          // clip
+          sum += greyscaleRep[iNew][jNew];
+          if (cdf[greyscaleRep[iNew][jNew]] >= clip) {
+            numClipped++;
+          } else {
+            cdf[greyscaleRep[iNew][jNew]]++;
+          }
+        }
+      }
+      const localMean = sum / regionSize;
+      const uniformity = numClipped / regionSize;
+      if (
+        greyscaleRep[i][j] >
+        (1 - uniformity) * localMean + uniformity * globalMean + c
+      ) {
+        binRep[i][j] = 1;
+      }
+    }
+  }
+  return binRep;
+};
+
 export const greyscaleToImg = (
   greyscaleRep: number[][],
   pixels: Uint8ClampedArray

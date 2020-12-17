@@ -1,19 +1,15 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import AppBar from "@material-ui/core/AppBar";
 import CssBaseline from "@material-ui/core/CssBaseline";
 import Divider from "@material-ui/core/Divider";
 import Drawer from "@material-ui/core/Drawer";
 import Hidden from "@material-ui/core/Hidden";
 import IconButton from "@material-ui/core/IconButton";
-import Tooltip from "@material-ui/core/Tooltip";
-import Slider from "@material-ui/core/Slider";
 import Button from "@material-ui/core/Button";
 import ButtonGroup from "@material-ui/core/ButtonGroup";
-import Input from "@material-ui/core/Input";
 import Card from "@material-ui/core/Card";
 import CardHeader from "@material-ui/core/CardHeader";
 import CardContent from "@material-ui/core/CardContent";
-import LinearProgress from "@material-ui/core/LinearProgress";
 import MenuIcon from "@material-ui/icons/Menu";
 import ArrowDropDownIcon from "@material-ui/icons/ArrowDropDown";
 import ClickAwayListener from "@material-ui/core/ClickAwayListener";
@@ -23,20 +19,26 @@ import Popper from "@material-ui/core/Popper";
 import MenuItem from "@material-ui/core/MenuItem";
 import MenuList from "@material-ui/core/MenuList";
 import PublishIcon from "@material-ui/icons/Publish";
-import Grid from "@material-ui/core/Grid";
 import Toolbar from "@material-ui/core/Toolbar";
 import Typography from "@material-ui/core/Typography";
 import { makeStyles, Theme, createStyles } from "@material-ui/core/styles";
-import { close, structSquare, getLargestComponents } from "./utils/morphology";
+import {
+  close,
+  structSquare,
+  getLargestComponents,
+  open,
+  dilate,
+  erode,
+  structCross,
+} from "./utils/morphology";
 import {
   buildCC,
   thinPixel,
   thinCC,
   ccToBin,
   generateLookupTable,
-  ccToGreyscale,
 } from "./utils/thin";
-import { getLength, invert } from "./utils/tools";
+import { getLength, invert, contrastLimitedAdaptive } from "./utils/tools";
 import {
   imgToGreyscale,
   greyscaleToBin,
@@ -44,24 +46,9 @@ import {
   binToImg,
   greyscaleToImg,
 } from "./utils/convert";
+import ModifiedSlider from "./components/ModifiedSlider";
 
 const drawerWidth = 300;
-
-interface Props {
-  children: React.ReactElement;
-  open: boolean;
-  value: number;
-}
-
-function ValueLabelComponent(props: Props) {
-  const { children, open, value } = props;
-
-  return (
-    <Tooltip open={open} enterTouchDelay={0} placement="top" title={value}>
-      {children}
-    </Tooltip>
-  );
-}
 
 const useStyles = makeStyles((theme: Theme) =>
   createStyles({
@@ -95,11 +82,16 @@ const useStyles = makeStyles((theme: Theme) =>
       padding: theme.spacing(3),
     },
     menu: {
+      display: "flex",
+      flexDirection: "column",
       padding: theme.spacing(3),
       position: "relative",
       "& > *": {
         marginBottom: theme.spacing(2),
       },
+    },
+    button: {
+      alignSelf: "flex-start",
     },
     imageContainer: {
       position: "relative",
@@ -127,9 +119,6 @@ const useStyles = makeStyles((theme: Theme) =>
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-    },
-    input: {
-      width: 42,
     },
     progress: {
       minWidth: 500,
@@ -162,15 +151,19 @@ function App() {
   const [file, setFile] = useState<string>();
   const [minThreshold, setMinThreshold] = useState<number>(188);
   const [maxThreshold, setMaxThreshold] = useState<number>(255);
-  const [morphology, setMorphology] = useState<number>(0);
+  const [closeIterations, setCloseIterations] = useState<number>(0);
+  const [openIterations, setOpenIterations] = useState<number>(0);
+  const [dilateIterations, setDilateIterations] = useState<number>(0);
+  const [erodeIterations, setErodeIterations] = useState<number>(0);
   const [length, setLength] = useState<number>();
-  const [maskLoaded, setMaskLoaded] = useState(false);
   const [brush, setBrush] = useState<number>(3);
   const [draw, setDraw] = useState(1);
   const [openThinButton, setOpenThinButton] = React.useState(false);
   const [thinIndex, setThinIndex] = React.useState(0);
-  const [openThresholdButton, setOpenThresholdButton] = React.useState(false);
-  const [thresholdIndex, setThresholdIndex] = React.useState(0);
+  const [clip, setClip] = React.useState(4);
+  const [blockRadius, setBlockRadius] = useState<number>(8);
+  const [contrastBlockRadius, setContrastBlockRadius] = useState<number>(8);
+  const [constant, setConstant] = useState<number>(5);
 
   const MIN_RGB = 0;
   const MAX_RGB = 255;
@@ -179,19 +172,24 @@ function App() {
   const SCALE = 0.5;
   const MAX_BRUSH = 200;
   const MIN_BRUSH = 0;
+  const MIN_BLOCK = 0;
+  const MAX_BLOCK = 32;
+  const MIN_CONSTANT = -30;
+  const MAX_CONSTANT = 100;
+  const MIN_CLIP = 1;
+  const MAX_CLIP = 100;
   const thinOptions = ["Cell Complex Thinning", "Serial Thinning"];
-  const thresholdOptions = ["Adaptive Threshold", "Simple Threshold"];
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const maskCanvasRef = useRef<HTMLCanvasElement>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const lookupRef = useRef<Record<string, boolean> | null>(null);
   const maskBinRef = useRef<number[][] | null>();
+  const greyscaleRef = useRef<number[][] | null>();
   const brushRef = useRef<HTMLDivElement>(null);
   const brushDownRef = useRef(false);
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const thinAnchorRef = React.useRef<HTMLDivElement>(null);
-  const thresholdAnchorRef = React.useRef<HTMLDivElement>(null);
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
@@ -199,74 +197,6 @@ function App() {
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFile(URL.createObjectURL(e.target.files?.[0]));
-  };
-
-  const handleMinThresholdSlider = (
-    e: React.ChangeEvent<{}>,
-    value: number | number[]
-  ) => {
-    value = Array.isArray(value) ? value[0] : value;
-    setMinThreshold(value);
-  };
-
-  const handleThresholdMenuItemClick = (
-    event: React.MouseEvent<HTMLLIElement, MouseEvent>,
-    index: number
-  ) => {
-    setThresholdIndex(index);
-    setOpenThresholdButton(false);
-  };
-
-  const handleThresholdToggle = () => {
-    setOpenThresholdButton((prev) => !prev);
-  };
-
-  const handleThresholdClose = (
-    event: React.MouseEvent<Document, MouseEvent>
-  ) => {
-    if (
-      thresholdAnchorRef.current &&
-      thresholdAnchorRef.current.contains(event.target as HTMLElement)
-    ) {
-      return;
-    }
-
-    setOpenThresholdButton(false);
-  };
-
-  const handleThresholdButton = () => {
-    if (
-      maskBinRef.current &&
-      lookupRef.current &&
-      maskCanvasRef.current &&
-      imgRef.current
-    ) {
-      const maskContext = maskCanvasRef.current.getContext("2d");
-      if (maskContext) {
-        const width = Math.floor(imgRef.current.width * SCALE);
-        const height = Math.floor(imgRef.current.height * SCALE);
-        let binRep = getLargestComponents(maskBinRef.current, 1, structSquare);
-        switch (thinIndex) {
-          case 0:
-            binRep = ccToBin(
-              thinCC(buildCC(binRep), [4, 0.4]),
-              height,
-              width,
-              lookupRef.current
-            );
-            break;
-          case 1:
-            binRep = thinPixel(binRep, lookupRef.current);
-            break;
-        }
-        maskBinRef.current = binRep;
-        const length = getLength(binRep, SCALE);
-        setLength(length);
-        const maskImage = maskContext.createImageData(width, height);
-        binToImg(binRep, maskImage.data);
-        maskContext.putImageData(maskImage, 0, 0);
-      }
-    }
   };
 
   const handleThinMenuItemClick = (
@@ -327,80 +257,6 @@ function App() {
     }
   };
 
-  const handleMinThresholdInput = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const newThreshold = Number(event.target.value);
-    if (newThreshold < MIN_RGB) {
-      setMinThreshold(MIN_RGB);
-    } else if (newThreshold > MAX_RGB) {
-      setMinThreshold(MAX_RGB);
-    } else {
-      setMinThreshold(newThreshold);
-    }
-  };
-
-  const handleMaxThresholdSlider = (
-    e: React.ChangeEvent<{}>,
-    value: number | number[]
-  ) => {
-    value = Array.isArray(value) ? value[0] : value;
-    setMaxThreshold(value);
-  };
-
-  const handleMaxThresholdInput = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const newThreshold = Number(event.target.value);
-    if (newThreshold < MIN_RGB) {
-      setMaxThreshold(MIN_RGB);
-    } else if (newThreshold > MAX_RGB) {
-      setMaxThreshold(MAX_RGB);
-    } else {
-      setMaxThreshold(newThreshold);
-    }
-  };
-
-  const handleMorphologySlider = (
-    e: React.ChangeEvent<{}>,
-    value: number | number[]
-  ) => {
-    value = Array.isArray(value) ? value[0] : value;
-    setMorphology(value);
-  };
-
-  const handleMorphologyInput = (
-    event: React.ChangeEvent<HTMLInputElement>
-  ) => {
-    const newMorphology = Number(event.target.value);
-    if (newMorphology < MIN_ITERATIONS) {
-      setMorphology(MIN_ITERATIONS);
-    } else if (newMorphology > MAX_ITERATIONS) {
-      setMorphology(MAX_ITERATIONS);
-    } else {
-      setMorphology(newMorphology);
-    }
-  };
-
-  const handleBrushSlider = (
-    e: React.ChangeEvent<{}>,
-    value: number | number[]
-  ) => {
-    value = Array.isArray(value) ? value[0] : value;
-    setBrush(value);
-  };
-
-  const handleBrushInput = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const newBrush = Number(event.target.value);
-    if (newBrush < MIN_BRUSH) {
-      setBrush(MIN_BRUSH);
-    } else if (newBrush > MAX_BRUSH) {
-      setBrush(MAX_BRUSH);
-    } else {
-      setBrush(newBrush);
-    }
-  };
-
   useEffect(() => {
     if (brushRef.current) {
       const size = brush * 2 + 1;
@@ -415,7 +271,7 @@ function App() {
     setDraw((prev) => (prev === 1 ? 0 : 1));
   };
 
-  const handleUpdateButton = () => {
+  const handleMorphologyButton = (type: string) => {
     if (
       maskBinRef.current &&
       lookupRef.current &&
@@ -426,14 +282,58 @@ function App() {
       if (maskContext) {
         const width = Math.floor(imgRef.current.width * SCALE);
         const height = Math.floor(imgRef.current.height * SCALE);
-        maskBinRef.current = close(
-          maskBinRef.current,
-          structSquare,
-          morphology
-        );
+        switch (type) {
+          case "open":
+            maskBinRef.current = open(
+              maskBinRef.current,
+              structCross,
+              openIterations
+            );
+            break;
+          case "close":
+            maskBinRef.current = close(
+              maskBinRef.current,
+              structCross,
+              closeIterations
+            );
+            break;
+          case "dilate":
+            maskBinRef.current = dilate(
+              maskBinRef.current,
+              structCross,
+              dilateIterations
+            );
+            break;
+          case "erode":
+            maskBinRef.current = erode(
+              maskBinRef.current,
+              structCross,
+              erodeIterations
+            );
+            break;
+        }
         const maskImage = maskContext.createImageData(width, height);
         binToImg(maskBinRef.current, maskImage.data);
         maskContext.putImageData(maskImage, 0, 0);
+      }
+    }
+  };
+
+  const handleContrastButton = () => {
+    if (greyscaleRef.current && canvasRef.current && imgRef.current) {
+      const context = canvasRef.current.getContext("2d");
+      if (context) {
+        const width = Math.floor(imgRef.current.width * SCALE);
+        const height = Math.floor(imgRef.current.height * SCALE);
+        let contrastRep = contrastLimitedAdaptive(
+          greyscaleRef.current,
+          contrastBlockRadius,
+          clip
+        );
+        greyscaleRef.current = contrastRep;
+        const bkgImage = context.createImageData(width, height);
+        greyscaleToImg(contrastRep, bkgImage.data);
+        context.putImageData(bkgImage, 0, 0);
       }
     }
   };
@@ -457,8 +357,12 @@ function App() {
     }
   };
 
-  const handleResetButton = () => {
-    updateImage();
+  const handleSimpleButton = () => {
+    thresholdImage(true);
+  };
+
+  const handleAdaptiveButton = () => {
+    thresholdImage(false);
   };
 
   const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -583,7 +487,34 @@ function App() {
     }
   };
 
-  const updateImage = useCallback(() => {
+  const thresholdImage = (simple: boolean) => {
+    if (
+      canvasRef.current &&
+      maskCanvasRef.current &&
+      imgRef.current &&
+      greyscaleRef.current
+    ) {
+      const context = canvasRef.current.getContext("2d");
+      const maskContext = maskCanvasRef.current.getContext("2d");
+      if (context && maskContext) {
+        const width = Math.floor(imgRef.current.width * SCALE);
+        const height = Math.floor(imgRef.current.height * SCALE);
+        let binRep = simple
+          ? greyscaleToBin(greyscaleRef.current, minThreshold, maxThreshold)
+          : greyscaleToBinAdaptive(greyscaleRef.current, blockRadius, constant);
+        maskBinRef.current = binRep;
+        const maskImage = maskContext.createImageData(width, height);
+        binToImg(binRep, maskImage.data);
+        maskContext.putImageData(maskImage, 0, 0);
+      }
+    }
+  };
+
+  const handleResetButton = () => {
+    setupImage();
+  };
+
+  const setupImage = () => {
     if (
       canvasRef.current &&
       maskCanvasRef.current &&
@@ -606,30 +537,65 @@ function App() {
         context.drawImage(imgRef.current, 0, 0, width, height);
         const image = context.getImageData(0, 0, width, height);
         const imagePixels = image.data;
-        const greyscaleRep = imgToGreyscale(imagePixels, width, height);
-        let binRep = greyscaleToBinAdaptive(greyscaleRep, 10, 7);
-        binRep = close(binRep, structSquare, morphology);
-        maskBinRef.current = binRep;
-        setMaskLoaded(true);
+        greyscaleRef.current = imgToGreyscale(imagePixels, width, height);
+      }
+    }
+  };
+
+  const handleLuckyButton = () => {
+    if (
+      canvasRef.current &&
+      maskCanvasRef.current &&
+      imgRef.current &&
+      lookupRef.current &&
+      imageContainerRef.current
+    ) {
+      const context = canvasRef.current.getContext("2d");
+      const maskContext = maskCanvasRef.current.getContext("2d");
+      if (context && maskContext) {
+        const width = Math.floor(imgRef.current.width * SCALE);
+        const height = Math.floor(imgRef.current.height * SCALE);
+        imageContainerRef.current.style.minHeight = `${height}px`;
+        context.drawImage(imgRef.current, 0, 0, width, height);
+        const image = context.getImageData(0, 0, width, height);
+        const imagePixels = image.data;
+        greyscaleRef.current = imgToGreyscale(imagePixels, width, height);
+        greyscaleRef.current = contrastLimitedAdaptive(
+          greyscaleRef.current,
+          8,
+          3
+        );
+        const bkgImage = context.createImageData(width, height);
+        greyscaleToImg(greyscaleRef.current, bkgImage.data);
+        context.putImageData(bkgImage, 0, 0);
+        maskBinRef.current = greyscaleToBinAdaptive(
+          greyscaleRef.current,
+          8,
+          30
+        );
+        maskBinRef.current = close(maskBinRef.current, structSquare, 1);
+        maskBinRef.current = getLargestComponents(
+          maskBinRef.current,
+          1,
+          structSquare
+        );
+        maskBinRef.current = thinPixel(maskBinRef.current, lookupRef.current);
+        const length = getLength(maskBinRef.current, SCALE);
+        setLength(length);
         const maskImage = maskContext.createImageData(width, height);
-        binToImg(binRep, maskImage.data);
+        binToImg(maskBinRef.current, maskImage.data);
         maskContext.putImageData(maskImage, 0, 0);
       }
     }
-  }, [minThreshold, maxThreshold, morphology]);
+  };
 
   useEffect(() => {
     imgRef.current = new Image();
     lookupRef.current = generateLookupTable();
+    imgRef.current.onload = () => {
+      setupImage();
+    };
   }, []);
-
-  useEffect(() => {
-    if (imgRef.current) {
-      imgRef.current.onload = () => {
-        updateImage();
-      };
-    }
-  }, [updateImage]);
 
   useEffect(() => {
     if (file && imgRef.current) {
@@ -642,128 +608,114 @@ function App() {
       <div className={classes.toolbar} />
       <Divider />
       <div className={classes.menu}>
-        <Typography variant="h6">Threshold Options</Typography>
-        <div>
-          <Typography id="min-threshold-slider" gutterBottom>
-            Minimum Threshold
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs>
-              <Slider
-                disabled={maskLoaded ? false : true}
-                ValueLabelComponent={ValueLabelComponent}
-                aria-label="minimum threshold"
-                onChange={handleMinThresholdSlider}
-                value={minThreshold}
-                min={MIN_RGB}
-                max={MAX_RGB}
-              />
-            </Grid>
-            <Grid item>
-              <Input
-                disabled={maskLoaded ? false : true}
-                className={classes.input}
-                value={minThreshold.toString()}
-                margin="dense"
-                onChange={handleMinThresholdInput}
-                inputProps={{
-                  min: MIN_RGB,
-                  max: MAX_RGB,
-                  type: "number",
-                  "aria-labelledby": "min-threshold-slider",
-                }}
-              />
-            </Grid>
-          </Grid>
-        </div>
-        <div>
-          <Typography id="max-threshold-slider" gutterBottom>
-            Maximum Threshold
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs>
-              <Slider
-                disabled={maskLoaded ? false : true}
-                ValueLabelComponent={ValueLabelComponent}
-                aria-label="maximum threshold"
-                onChange={handleMaxThresholdSlider}
-                value={maxThreshold}
-                min={MIN_RGB}
-                max={MAX_RGB}
-              />
-            </Grid>
-            <Grid item>
-              <Input
-                disabled={maskLoaded ? false : true}
-                className={classes.input}
-                value={maxThreshold.toString()}
-                margin="dense"
-                onChange={handleMaxThresholdInput}
-                inputProps={{
-                  min: MIN_RGB,
-                  max: MAX_RGB,
-                  type: "number",
-                  "aria-labelledby": "min-threshold-slider",
-                }}
-              />
-            </Grid>
-          </Grid>
-        </div>
+        <Typography variant="h6">Contrast Options</Typography>
         <Button
           variant="contained"
           color="primary"
           onClick={handleResetButton}
-          disabled={maskLoaded ? false : true}
+          disabled={file ? false : true}
+          className={classes.button}
         >
-          Reset Mask
+          Reset Image
         </Button>
+        <ModifiedSlider
+          title="Block Radius"
+          id="contrast-block-radius-slider"
+          disabled={file ? false : true}
+          current={contrastBlockRadius}
+          setCurrent={setContrastBlockRadius}
+          min={MIN_BLOCK}
+          max={MAX_BLOCK}
+        />
+        <ModifiedSlider
+          title="Clip"
+          id="clip-slider"
+          disabled={file ? false : true}
+          current={clip}
+          setCurrent={setClip}
+          min={MIN_CLIP}
+          max={MAX_CLIP}
+        />
         <Button
           variant="outlined"
-          onClick={handleClearButton}
-          disabled={maskLoaded ? false : true}
+          color="secondary"
+          onClick={handleContrastButton}
+          disabled={file ? false : true}
+          className={classes.button}
         >
-          Clear mask
+          Adaptive Contrast
+        </Button>
+        <Typography variant="h6">Threshold Options</Typography>
+        <ModifiedSlider
+          title="Minimum Threshold"
+          id="min-threshold-slider"
+          disabled={file ? false : true}
+          current={minThreshold}
+          setCurrent={setMinThreshold}
+          min={MIN_RGB}
+          max={MAX_RGB}
+        />
+        <ModifiedSlider
+          title="Max Threshold"
+          id="max-threshold-slider"
+          disabled={file ? false : true}
+          current={maxThreshold}
+          setCurrent={setMaxThreshold}
+          min={MIN_RGB}
+          max={MAX_RGB}
+        />
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={handleSimpleButton}
+          disabled={file ? false : true}
+          className={classes.button}
+        >
+          Simple Threshold
+        </Button>
+        <ModifiedSlider
+          title="Block Radius"
+          id="block-radius-slider"
+          disabled={file ? false : true}
+          current={blockRadius}
+          setCurrent={setBlockRadius}
+          min={MIN_BLOCK}
+          max={MAX_BLOCK}
+        />
+        <ModifiedSlider
+          title="Constant"
+          id="constant-slider"
+          disabled={file ? false : true}
+          current={constant}
+          setCurrent={setConstant}
+          min={MIN_CONSTANT}
+          max={MAX_CONSTANT}
+        />
+        <Button
+          variant="outlined"
+          color="secondary"
+          onClick={handleAdaptiveButton}
+          disabled={file ? false : true}
+          className={classes.button}
+        >
+          Adaptive Threshold
         </Button>
         <Typography variant="h6" className={classes.menuTitle}>
           Mask Tools
         </Typography>
-        <div>
-          <Typography id="brush-slider" gutterBottom>
-            Brush Radius
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs>
-              <Slider
-                disabled={maskLoaded ? false : true}
-                ValueLabelComponent={ValueLabelComponent}
-                aria-label="brush radius"
-                onChange={handleBrushSlider}
-                value={brush}
-                min={MIN_BRUSH}
-                max={MAX_BRUSH}
-              />
-            </Grid>
-            <Grid item>
-              <Input
-                disabled={maskLoaded ? false : true}
-                className={classes.input}
-                value={brush.toString()}
-                margin="dense"
-                onChange={handleBrushInput}
-                inputProps={{
-                  min: MIN_BRUSH,
-                  max: MAX_BRUSH,
-                  type: "number",
-                  "aria-labelledby": "brush-slider",
-                }}
-              />
-            </Grid>
-          </Grid>
-        </div>
+        <ModifiedSlider
+          title="Brush Radius"
+          id="brush-slider"
+          disabled={file ? false : true}
+          current={brush}
+          setCurrent={setBrush}
+          min={MIN_BRUSH}
+          max={MAX_BRUSH}
+        />
         <ButtonGroup
           color="primary"
           aria-label="mask tools"
-          disabled={maskLoaded ? false : true}
+          disabled={file ? false : true}
         >
           <Button
             variant={draw === 1 ? "contained" : undefined}
@@ -781,53 +733,93 @@ function App() {
         <Button
           variant="outlined"
           onClick={handleInvertButton}
-          disabled={maskLoaded ? false : true}
+          disabled={file ? false : true}
+          className={classes.button}
         >
           Invert Mask
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={handleClearButton}
+          disabled={file ? false : true}
+          className={classes.button}
+        >
+          Clear mask
         </Button>
         <Typography variant="h6" className={classes.menuTitle}>
           Mask Morphology
         </Typography>
-        <div>
-          <Typography id="morphology-slider" gutterBottom>
-            Close Iterations
-          </Typography>
-          <Grid container spacing={2}>
-            <Grid item xs>
-              <Slider
-                disabled={maskLoaded ? false : true}
-                ValueLabelComponent={ValueLabelComponent}
-                aria-label="custom thumb label"
-                onChange={handleMorphologySlider}
-                value={morphology}
-                min={MIN_ITERATIONS}
-                max={MAX_ITERATIONS}
-              />
-            </Grid>
-            <Grid item>
-              <Input
-                disabled={maskLoaded ? false : true}
-                className={classes.input}
-                value={morphology.toString()}
-                margin="dense"
-                onChange={handleMorphologyInput}
-                inputProps={{
-                  min: MIN_ITERATIONS,
-                  max: MAX_ITERATIONS,
-                  type: "number",
-                  "aria-labelledby": "morphology-slider",
-                }}
-              />
-            </Grid>
-          </Grid>
-        </div>
+        <ModifiedSlider
+          title="Close Iterations"
+          id="close-slider"
+          disabled={file ? false : true}
+          current={closeIterations}
+          setCurrent={setCloseIterations}
+          min={MIN_ITERATIONS}
+          max={MAX_ITERATIONS}
+        />
         <Button
-          variant="contained"
+          variant="outlined"
           color="primary"
-          onClick={handleUpdateButton}
-          disabled={maskLoaded ? false : true}
+          onClick={() => handleMorphologyButton("close")}
+          disabled={file ? false : true}
+          className={classes.button}
         >
-          Update Mask
+          Close Mask
+        </Button>
+        <ModifiedSlider
+          title="Open Iterations"
+          id="open-slider"
+          disabled={file ? false : true}
+          current={openIterations}
+          setCurrent={setOpenIterations}
+          min={MIN_ITERATIONS}
+          max={MAX_ITERATIONS}
+        />
+        <Button
+          variant="outlined"
+          color="primary"
+          onClick={() => handleMorphologyButton("open")}
+          disabled={file ? false : true}
+          className={classes.button}
+        >
+          Open Mask
+        </Button>
+        <ModifiedSlider
+          title="Dilate Iterations"
+          id="dilate-slider"
+          disabled={file ? false : true}
+          current={dilateIterations}
+          setCurrent={setDilateIterations}
+          min={MIN_ITERATIONS}
+          max={MAX_ITERATIONS}
+        />
+        <Button
+          variant="outlined"
+          color="primary"
+          onClick={() => handleMorphologyButton("dilate")}
+          disabled={file ? false : true}
+          className={classes.button}
+        >
+          Dilate Mask
+        </Button>
+        <ModifiedSlider
+          title="Erode Iterations"
+          id="erode-slider"
+          disabled={file ? false : true}
+          current={erodeIterations}
+          setCurrent={setErodeIterations}
+          min={MIN_ITERATIONS}
+          max={MAX_ITERATIONS}
+        />
+        <Button
+          variant="outlined"
+          color="primary"
+          onClick={() => handleMorphologyButton("erode")}
+          disabled={file ? false : true}
+          className={classes.button}
+        >
+          Erode Mask
         </Button>
       </div>
     </div>
@@ -903,7 +895,7 @@ function App() {
             variant="contained"
             color="primary"
             ref={thinAnchorRef}
-            disabled={maskLoaded ? false : true}
+            disabled={file ? false : true}
             aria-label="thin button"
           >
             <Button onClick={handleThinButton}>{thinOptions[thinIndex]}</Button>
@@ -954,69 +946,11 @@ function App() {
               </Grow>
             )}
           </Popper>
-          <ButtonGroup
-            variant="contained"
-            color="primary"
-            ref={thresholdAnchorRef}
-            disabled={maskLoaded ? false : true}
-            aria-label="threshold button"
-          >
-            <Button onClick={handleThresholdButton}>
-              {thresholdOptions[thresholdIndex]}
-            </Button>
-            <Button
-              color="primary"
-              size="small"
-              aria-controls={
-                openThresholdButton ? "threshold-button-menu" : undefined
-              }
-              aria-expanded={openThresholdButton ? "true" : undefined}
-              aria-label="select threshold option"
-              aria-haspopup="menu"
-              onClick={handleThresholdToggle}
-            >
-              <ArrowDropDownIcon />
-            </Button>
-          </ButtonGroup>
-          <Popper
-            open={openThresholdButton}
-            anchorEl={thresholdAnchorRef.current}
-            role={undefined}
-            transition
-            disablePortal
-          >
-            {({ TransitionProps, placement }) => (
-              <Grow
-                {...TransitionProps}
-                style={{
-                  transformOrigin:
-                    placement === "bottom" ? "center top" : "center bottom",
-                }}
-              >
-                <Paper>
-                  <ClickAwayListener onClickAway={handleThresholdClose}>
-                    <MenuList id="threshold-button-menu">
-                      {thresholdOptions.map((option, index) => (
-                        <MenuItem
-                          key={option}
-                          selected={index === thresholdIndex}
-                          onClick={(event) =>
-                            handleThresholdMenuItemClick(event, index)
-                          }
-                        >
-                          {option}
-                        </MenuItem>
-                      ))}
-                    </MenuList>
-                  </ClickAwayListener>
-                </Paper>
-              </Grow>
-            )}
-          </Popper>
           <Button
             variant="outlined"
             color="secondary"
-            disabled={maskLoaded ? false : true}
+            onClick={handleLuckyButton}
+            disabled={file ? false : true}
           >
             I'M FEELING LUCKY
           </Button>
@@ -1031,18 +965,11 @@ function App() {
           />
           <Divider />
           <CardContent className={classes.cardContent}>
-            {!file && !maskLoaded && (
+            {!file && (
               <Typography variant="subtitle1">Please select a file</Typography>
             )}
-            {file && !maskLoaded && (
-              <LinearProgress className={classes.progress} />
-            )}
             {file && (
-              <div
-                className={classes.imageContainer}
-                style={{ display: maskLoaded ? "block" : "none" }}
-                ref={imageContainerRef}
-              >
+              <div className={classes.imageContainer} ref={imageContainerRef}>
                 <canvas className={classes.canvas} ref={canvasRef} />
                 <canvas
                   className={classes.mask}

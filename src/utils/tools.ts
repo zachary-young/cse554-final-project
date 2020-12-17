@@ -84,6 +84,92 @@ export const getLength = (binRep: number[][], scale: number) => {
       }
     }
   }
-
   return (length * (1 / scale)) / 3.06;
+};
+
+export const contrastAdaptive = (greyscaleRep: number[][], radius: number) => {
+  const height = greyscaleRep.length;
+  const width = greyscaleRep[0].length;
+  const contrastRep = [...Array(height)].map((e) => Array(width));
+  for (let i = 0; i < height; i++) {
+    for (let j = 0; j < width; j++) {
+      let rank = 0;
+      let blockWidth = radius * 2 + 1;
+      let regionSize = blockWidth * blockWidth;
+      const value = greyscaleRep[i][j];
+      for (let a = i - radius; a <= i + radius; a++) {
+        for (let b = j - radius; b <= j + radius; b++) {
+          let iNew = a;
+          let jNew = b;
+          if (a < 0) {
+            iNew = -(a + 1);
+          } else if (a >= height) {
+            iNew = -(a - height) + height - 1;
+          }
+          if (b < 0) {
+            jNew = -(b + 1);
+          } else if (b >= width) {
+            jNew = -(b - width) + width - 1;
+          }
+          if (value > greyscaleRep[iNew][jNew]) {
+            rank++;
+          }
+        }
+      }
+      contrastRep[i][j] = Math.floor((rank / regionSize) * 255 + 0.5);
+    }
+  }
+  return contrastRep;
+};
+
+export const contrastLimitedAdaptive = (
+  greyscaleRep: number[][],
+  radius: number,
+  clip: number
+) => {
+  const height = greyscaleRep.length;
+  const width = greyscaleRep[0].length;
+  const contrastRep = [...Array(height)].map((e) => Array(width));
+  for (let i = 0; i < height; i++) {
+    for (let j = 0; j < width; j++) {
+      let blockWidth = radius * 2 + 1;
+      let regionSize = blockWidth * blockWidth;
+      const value = greyscaleRep[i][j];
+      const cdf = Array(256).fill(0);
+      let numClipped = 0;
+      for (let a = i - radius; a <= i + radius; a++) {
+        for (let b = j - radius; b <= j + radius; b++) {
+          let iNew = a;
+          let jNew = b;
+          if (a < 0) {
+            iNew = -(a + 1);
+          } else if (a >= height) {
+            iNew = -(a - height) + height - 1;
+          }
+          if (b < 0) {
+            jNew = -(b + 1);
+          } else if (b >= width) {
+            jNew = -(b - width) + width - 1;
+          }
+          // clip
+          if (cdf[greyscaleRep[iNew][jNew]] >= clip) {
+            numClipped++;
+          } else {
+            cdf[greyscaleRep[iNew][jNew]]++;
+          }
+        }
+      }
+      let sliced = cdf.slice(0, value);
+      let rank = 0;
+      if (sliced.length > 0) {
+        rank = cdf
+          .slice(0, value)
+          .reduce((accumulator, currentValue) => accumulator + currentValue);
+      }
+      // add clips to bottom
+      rank += (value / 255) * numClipped;
+      contrastRep[i][j] = Math.floor((rank / regionSize) * 255 + 0.5);
+    }
+  }
+  return contrastRep;
 };
